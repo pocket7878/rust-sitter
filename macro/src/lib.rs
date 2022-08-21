@@ -109,7 +109,9 @@ fn gen_field(path: String, leaf: Field, field_index: usize, out: &mut Vec<Item>)
                         },
                     )
                 } else {
-                    let (inner_type, is_box) = try_extract_inner_type(&inner_type, "Box");
+                    //let (inner_type, is_box) = try_extract_inner_type(&inner_type, "Box");
+                    let (inner_type, wrapping_fn) =
+                        try_extract_inner_type_from_smart_pointer_type(&inner_type);
 
                     let extracted_inner: Expr = if is_option {
                         syn::parse_quote!(node.map(|n| #inner_type::extract(n, source)))
@@ -117,6 +119,13 @@ fn gen_field(path: String, leaf: Field, field_index: usize, out: &mut Vec<Item>)
                         syn::parse_quote!(#inner_type::extract(node.unwrap(), source))
                     };
 
+                    (
+                        vec![],
+                        syn::parse_quote! {
+                            #wrapping_fn(#extracted_inner)
+                        },
+                    )
+                    /*
                     if is_box {
                         (
                             vec![],
@@ -132,6 +141,7 @@ fn gen_field(path: String, leaf: Field, field_index: usize, out: &mut Vec<Item>)
                             },
                         )
                     }
+                    */
                 }
             }
         }
@@ -375,7 +385,10 @@ fn expand_grammar(input: ItemMod) -> ItemMod {
                 vec![Item::Struct(s), extract_impl]
             }
 
-            _ => panic!(),
+            _ => {
+                eprintln!("Ignoring item: {:?}", c);
+                vec![c]
+            }
         })
         .collect();
 
@@ -732,6 +745,31 @@ mod tests {
                             #[rust_sitter::leaf(text = "!")]
                             _bang: (),
                             value: Box<Expr>,
+                        }
+                    }
+                }
+            })
+            .to_token_stream()
+            .to_string()
+        ));
+    }
+
+    #[test]
+    fn nested_smart_pointer() {
+        insta::assert_display_snapshot!(rustfmt_code(
+            &expand_grammar(parse_quote! {
+                #[rust_sitter::grammar("test")]
+                mod grammar {
+                    #[rust_sitter::language]
+                    pub enum Expr {
+                        Number(
+                                #[rust_sitter::leaf(pattern = r"\d+", transform = |v| v.parse().unwrap())]
+                                u32
+                        ),
+                        Neg {
+                            #[rust_sitter::leaf(text = "!")]
+                            _bang: (),
+                            value: Rc<RefCell<Expr>>,
                         }
                     }
                 }

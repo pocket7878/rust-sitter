@@ -167,7 +167,8 @@ fn gen_field(path: String, leaf: Field, field_index: usize, out: &mut Map<String
                 })
             }
         } else {
-            let (inner_type, _) = try_extract_inner_type(&inner_type, "Box");
+            let (inner_type, _) = try_extract_inner_type_from_smart_pointer_type(&inner_type);
+            //let (inner_type, _) = try_extract_inner_type(&inner_type, "Box");
 
             if let Type::Path(p) = &inner_type {
                 if p.path.segments.len() == 1 {
@@ -334,50 +335,50 @@ fn generate_grammar(module: &ItemMod) -> Value {
         .expect("Each parser must have the root type annotated with `#[rust_sitter::language]`")
         .to_string();
 
-    contents.iter().for_each(|c| {
-        let (symbol, attrs) = match c {
-            Item::Enum(e) => {
-                e.variants.iter().for_each(|v| {
-                    gen_struct_or_variant(
-                        format!("{}_{}", e.ident, v.ident),
-                        v.attrs.clone(),
-                        v.fields.clone(),
-                        &mut rules_map,
-                    )
-                });
-
-                let mut members: Vec<Value> = vec![];
-                e.variants.iter().for_each(|v| {
-                    let variant_path = format!("{}_{}", e.ident.clone(), v.ident);
-                    members.push(json!({
-                        "type": "SYMBOL",
-                        "name": variant_path
-                    }))
-                });
-
-                let rule = json!({
-                    "type": "CHOICE",
-                    "members": members
-                });
-
-                rules_map.insert(e.ident.to_string(), rule);
-
-                (e.ident.to_string(), e.attrs.clone())
-            }
-
-            Item::Struct(s) => {
+    for c in contents.iter() {
+        let (symbol, attrs);
+        if let Item::Enum(e) = c {
+            e.variants.iter().for_each(|v| {
                 gen_struct_or_variant(
-                    s.ident.to_string(),
-                    s.attrs.clone(),
-                    s.fields.clone(),
+                    format!("{}_{}", e.ident, v.ident),
+                    v.attrs.clone(),
+                    v.fields.clone(),
                     &mut rules_map,
-                );
+                )
+            });
 
-                (s.ident.to_string(), s.attrs.clone())
-            }
+            let mut members: Vec<Value> = vec![];
+            e.variants.iter().for_each(|v| {
+                let variant_path = format!("{}_{}", e.ident.clone(), v.ident);
+                members.push(json!({
+                    "type": "SYMBOL",
+                    "name": variant_path
+                }))
+            });
 
-            _ => panic!(),
-        };
+            let rule = json!({
+                "type": "CHOICE",
+                "members": members
+            });
+
+            rules_map.insert(e.ident.to_string(), rule);
+
+            symbol = e.ident.to_string();
+            attrs = e.attrs.clone();
+        } else if let Item::Struct(s) = c {
+            gen_struct_or_variant(
+                s.ident.to_string(),
+                s.attrs.clone(),
+                s.fields.clone(),
+                &mut rules_map,
+            );
+
+            symbol = s.ident.to_string();
+            attrs = s.attrs.clone();
+        } else {
+            eprintln!("Unsupported item: {:?}", c);
+            continue;
+        }
 
         if attrs
             .iter()
@@ -388,7 +389,7 @@ fn generate_grammar(module: &ItemMod) -> Value {
                 "name": symbol
             }));
         }
-    });
+    }
 
     rules_map.insert(
         "source_file".to_string(),
@@ -736,6 +737,33 @@ mod tests {
                     Numbers(
                         #[rust_sitter::repeat(non_empty = true)]
                         Vec<Number>
+                    )
+                }
+            }
+        } {
+            m
+        } else {
+            panic!()
+        };
+
+        insta::assert_display_snapshot!(generate_grammar(&m));
+    }
+
+    #[test]
+    fn smart_pointer() {
+        let m = if let syn::Item::Mod(m) = parse_quote! {
+            #[rust_sitter::grammar("test")]
+            mod grammar {
+                pub struct Number {
+                        #[rust_sitter::leaf(pattern = r"\d+", transform = |v| v.parse().unwrap())]
+                        value: u32
+                }
+
+                #[rust_sitter::language]
+                pub enum Expr {
+                    Numbers(
+                        #[rust_sitter::repeat(non_empty = true)]
+                        Box<Number>
                     )
                 }
             }
